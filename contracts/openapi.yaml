@@ -1,0 +1,330 @@
+# Provided contract (agent-platform ADR 0003, ADR 0004). Bump info.version on every change;
+# a breaking change bumps MAJOR and keeps the old major served.
+#
+# The dialect endpoints forward bodies to the provider unchanged: their request and response
+# schemas name only the fields the gateway itself reads, and allow everything else through.
+openapi: 3.1.0
+info:
+  title: llm-gateway
+  version: 0.1.0
+  description: "LLM gateway for the agent services: native Anthropic and OpenAI-compatible endpoints with placement, capacity limits and usage accounting."
+security:
+  - gatewayKey: []
+  - gatewayBearer: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Liveness check (no authentication, not traced).
+      security: []
+      responses:
+        "200":
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /anthropic/v1/messages:
+    post:
+      operationId: createAnthropicMessage
+      summary: Anthropic Messages API, forwarded byte-faithfully (cache_control, system blocks, tool order and history unchanged).
+      description: >-
+        Point `ChatAnthropic(base_url=<gateway>/anthropic)` (or the Anthropic SDK) here with
+        the gateway client key as `x-api-key`. `model` must be a real model ID listed by
+        `GET /v1/models` with dialect `anthropic`. The gateway chooses the placement
+        (provider pool, workspace, region), keeps a thread on one placement for prompt-cache
+        affinity, and never changes the model. Errors use the Anthropic error shape so the
+        SDKs can parse and retry them.
+      security:
+        - gatewayKey: []
+      parameters:
+        - $ref: "#/components/parameters/AnthropicVersion"
+        - $ref: "#/components/parameters/AnthropicBeta"
+        - $ref: "#/components/parameters/AgentThread"
+        - $ref: "#/components/parameters/AgentRoute"
+        - $ref: "#/components/parameters/AgentIdentity"
+        - $ref: "#/components/parameters/AgentDeadline"
+        - $ref: "#/components/parameters/Placement"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnthropicMessagesRequest"
+      responses:
+        "200":
+          description: The provider's response, unchanged (JSON, or an SSE stream when `stream` is true).
+          headers:
+            x-gateway-provider:
+              $ref: "#/components/headers/GatewayProvider"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnthropicMessage"
+            text/event-stream:
+              schema:
+                type: string
+        "429":
+          $ref: "#/components/responses/AnthropicRateLimited"
+
+  /openai/v1/chat/completions:
+    post:
+      operationId: createChatCompletion
+      summary: OpenAI-compatible chat completions for self-hosted models (vLLM, SGLang), forwarded unchanged.
+      description: >-
+        Point `ChatOpenAI(base_url=<gateway>/openai/v1, use_responses_api=False)` here with
+        the gateway client key as the bearer token. `model` must be listed by
+        `GET /v1/models` with dialect `openai`. Threads stick to one replica so the server's
+        prefix cache is reused. Errors use the OpenAI error shape.
+      security:
+        - gatewayBearer: []
+      parameters:
+        - $ref: "#/components/parameters/AgentThread"
+        - $ref: "#/components/parameters/AgentRoute"
+        - $ref: "#/components/parameters/AgentIdentity"
+        - $ref: "#/components/parameters/AgentDeadline"
+        - $ref: "#/components/parameters/Placement"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+      responses:
+        "200":
+          description: The server's response, unchanged (JSON, or an SSE stream when `stream` is true).
+          headers:
+            x-gateway-provider:
+              $ref: "#/components/headers/GatewayProvider"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletion"
+            text/event-stream:
+              schema:
+                type: string
+        "429":
+          $ref: "#/components/responses/OpenAIRateLimited"
+
+  /v1/models:
+    get:
+      operationId: listModels
+      summary: Models this gateway serves, with dialect and capabilities. Agents validate their config against it at startup.
+      responses:
+        "200":
+          description: Served models.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelList"
+
+components:
+  securitySchemes:
+    gatewayKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: Gateway client key (identifies the calling service). Provider credentials never leave the gateway.
+    gatewayBearer:
+      type: http
+      scheme: bearer
+      description: The same gateway client key, as the OpenAI SDK sends it.
+
+  parameters:
+    AnthropicVersion:
+      name: anthropic-version
+      in: header
+      required: true
+      schema: {type: string}
+    AnthropicBeta:
+      name: anthropic-beta
+      in: header
+      schema: {type: string}
+    AgentThread:
+      name: x-agent-thread
+      in: header
+      description: Conversation ID. Used for placement affinity only, never for authorization.
+      schema: {type: string, pattern: "^[A-Za-z0-9_-]{1,64}$"}
+    AgentRoute:
+      name: x-agent-route
+      in: header
+      description: Priority class for queueing and limits.
+      schema: {type: string, enum: [interactive, background]}
+    AgentIdentity:
+      name: x-agent-identity
+      in: header
+      description: Signed end-user identity (conventions); used for per-tenant quotas and the usage ledger.
+      schema: {type: string}
+    AgentDeadline:
+      name: x-agent-deadline
+      in: header
+      description: RFC 3339 instant after which the caller no longer wants the result.
+      schema: {type: string, format: date-time}
+    Placement:
+      name: x-gateway-placement
+      in: header
+      description: Optional placement constraint, e.g. a data-residency region. Never changes the model.
+      schema: {type: string, enum: [us, eu]}
+
+  headers:
+    GatewayProvider:
+      description: Where the request ran (bounded set, e.g. claude-api, claude-platform-aws, bedrock, vllm).
+      schema: {type: string}
+
+  responses:
+    AnthropicRateLimited:
+      description: Gateway or provider capacity exhausted (Anthropic error shape).
+      headers:
+        retry-after:
+          schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AnthropicError"
+    OpenAIRateLimited:
+      description: Gateway or replica capacity exhausted (OpenAI error shape).
+      headers:
+        retry-after:
+          schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OpenAIError"
+
+  schemas:
+    Health:
+      type: object
+      required: [status, version, uptime_s]
+      properties:
+        status: {type: string, enum: [ok]}
+        version: {type: string}
+        uptime_s: {type: number, minimum: 0}
+
+    Error:
+      description: The error envelope from agent-platform docs/conventions.md (non-dialect endpoints).
+      type: object
+      required: [error, trace_id]
+      properties:
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type:
+              type: string
+              enum: [invalid_request, unauthenticated, forbidden, not_found, conflict,
+                     rate_limited, upstream_error, unavailable, timeout, internal]
+            message: {type: string}
+        trace_id: {type: string, pattern: "^[0-9a-f]{32}$"}
+
+    AnthropicMessagesRequest:
+      description: Anthropic Messages API request. Fields not listed are forwarded unchanged.
+      type: object
+      required: [model, max_tokens, messages]
+      properties:
+        model: {type: string, minLength: 1}
+        max_tokens: {type: integer, minimum: 1}
+        messages: {type: array, minItems: 1}
+        stream: {type: boolean}
+      additionalProperties: true
+
+    AnthropicMessage:
+      description: Anthropic Messages API response, unchanged. `usage` is never rewritten.
+      type: object
+      required: [id, type, model, content, usage]
+      properties:
+        id: {type: string}
+        type: {type: string}
+        model: {type: string}
+        content: {type: array}
+        usage:
+          type: object
+          required: [input_tokens, output_tokens]
+          properties:
+            input_tokens: {type: integer}
+            output_tokens: {type: integer}
+            cache_read_input_tokens: {type: [integer, "null"]}
+            cache_creation_input_tokens: {type: [integer, "null"]}
+          additionalProperties: true
+      additionalProperties: true
+
+    AnthropicError:
+      type: object
+      required: [type, error]
+      properties:
+        type: {type: string, enum: [error]}
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type: {type: string}
+            message: {type: string}
+
+    ChatCompletionRequest:
+      description: OpenAI chat completions request. Fields not listed are forwarded unchanged.
+      type: object
+      required: [model, messages]
+      properties:
+        model: {type: string, minLength: 1}
+        messages: {type: array, minItems: 1}
+        stream: {type: boolean}
+      additionalProperties: true
+
+    ChatCompletion:
+      description: OpenAI chat completion response, unchanged.
+      type: object
+      required: [id, model, choices]
+      properties:
+        id: {type: string}
+        model: {type: string}
+        choices: {type: array}
+        usage:
+          type: object
+          properties:
+            prompt_tokens: {type: integer}
+            completion_tokens: {type: integer}
+          additionalProperties: true
+      additionalProperties: true
+
+    OpenAIError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message: {type: string}
+            type: {type: string}
+            code: {type: [string, "null"]}
+
+    ModelList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ServedModel"
+
+    ServedModel:
+      type: object
+      required: [id, dialect, capabilities]
+      properties:
+        id:
+          type: string
+          description: The real model ID agents put in `model` (never a role alias).
+        dialect:
+          type: string
+          enum: [anthropic, openai]
+        capabilities:
+          type: object
+          required: [tool_calling, max_input_tokens, prompt_caching]
+          properties:
+            tool_calling: {type: boolean}
+            max_input_tokens: {type: integer, minimum: 1}
+            prompt_caching:
+              type: string
+              description: "explicit: cache_control markers (Anthropic); automatic: server prefix caching (vLLM); none"
+              enum: [explicit, automatic, none]
+            thinking: {type: boolean}
