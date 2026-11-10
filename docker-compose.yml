@@ -1,0 +1,23 @@
+# Local stack: the service plus Grafana LGTM (OTLP collector, Tempo, Loki, Prometheus).
+#   docker compose up --build        # service on :8080, Grafana on :3000
+services:
+  llm-gateway:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      LLM_GATEWAY_ENVIRONMENT: local
+      OTEL_SERVICE_NAME: llm-gateway
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      LLM_GATEWAY_METRIC_EXPORT_INTERVAL_S: "15"
+    depends_on:
+      - otel-lgtm
+
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.38.1
+    ports:
+      - "3000:3000" # Grafana
+      - "4318:4318" # OTLP HTTP
