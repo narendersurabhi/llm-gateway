@@ -64,9 +64,12 @@ def test_docs_branch_cannot_change_code(repo):
 
 
 def test_existing_specs_satisfy_policy():
-    """Every existing spec folder would pass as its own feature branch."""
+    """Every finished spec folder would pass as its own feature branch. Drafts (tests written,
+    not implemented) are exempt here; `--ready` still blocks a PR for them."""
     root = Path(__file__).parent.parent
     for spec_dir in sorted((root / "specs").glob("[0-9][0-9][0-9]-*")):
+        if "| **Status** | Draft" in (spec_dir / "spec.md").read_text():
+            continue
         assert violations(f"spec/{spec_dir.name}", [], ready=True) == [], spec_dir.name
 
 
