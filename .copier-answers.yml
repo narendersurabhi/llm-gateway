@@ -1,0 +1,9 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: 81d74e0
+_src_path: gh:narendersurabhi/agent-platform
+description: 'LLM gateway for the agent services: native Anthropic and OpenAI-compatible
+    endpoints with placement, capacity limits and usage accounting.'
+env_prefix: LLM_GATEWAY_
+package_name: llm_gateway
+port: 8080
+project_name: llm-gateway

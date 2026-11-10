@@ -1,0 +1,67 @@
+# Local quality gates; there is no hosted CI. Install once per clone:
+#   uv run pre-commit install
+# Every hook is local and runs through `uv run`, so it uses the locked .venv.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+fail_fast: true
+
+repos:
+  - repo: local
+    hooks:
+      # ---- every commit (fast) ----------------------------------------------------------
+      - id: branch-policy
+        name: branch policy (no commits to main, branch naming, spec folder)
+        entry: uv run python scripts/branch_policy.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix --exit-non-zero-on-fix
+        language: system
+        types: [python]
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+
+      - id: uv-lock
+        name: uv.lock in sync with pyproject.toml
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+
+      - id: check-layers
+        name: ports-and-adapters layers (ADR 0002)
+        entry: uv run python scripts/check_layers.py
+        language: system
+        files: ^src/
+        pass_filenames: false
+
+      - id: contract-check
+        name: contracts valid, versioned, no unannounced breaking changes
+        entry: uv run python scripts/contract_check.py
+        language: system
+        files: ^contracts/
+        pass_filenames: false
+
+      - id: spec-traceability
+        name: spec traceability (every requirement has a test)
+        entry: uv run python scripts/spec_coverage.py
+        language: system
+        files: ^(specs/|tests/|scripts/spec_coverage\.py)
+        pass_filenames: false
+
+      # ---- every push (full offline suite) -------------------------------------------------
+      - id: pytest
+        name: pytest (offline suite)
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

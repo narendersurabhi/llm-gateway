@@ -1,0 +1,62 @@
+[project]
+name = "llm-gateway"
+version = "0.1.0"
+description = "LLM gateway for the agent services: native Anthropic and OpenAI-compatible endpoints with placement, capacity limits and usage accounting."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.6",
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-instrumentation-logging>=0.48b0",
+]
+
+[project.scripts]
+llm-gateway = "llm_gateway.__main__:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+    "openapi-spec-validator>=0.7",
+    "pre-commit>=4.0",
+    "pytest>=8.0",
+    "pyyaml>=6.0",
+    "ruff>=0.6",
+]
+
+[tool.uv]
+# Always use a uv-managed interpreter in the project .venv, never a system Python.
+python-preference = "only-managed"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_gateway"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts", "tests"]
+addopts = "-m 'not live'"
+markers = [
+    "spec(*ids): requirement IDs from specs/*/spec.md that this test verifies",
+    "live: needs real external services (opt-in: pytest -m live)",
+]
+
+# ADR 0002: extra libraries the application layer may import (pure ones only).
+[tool.check-layers]
+application-allow = []
