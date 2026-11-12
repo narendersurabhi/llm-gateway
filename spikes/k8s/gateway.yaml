@@ -16,6 +16,39 @@ spec:
   - name: http
     protocol: HTTP
     port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: spike-proxy
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: spike-proxy
+  namespace: spike
+spec:
+  telemetry:
+    accessLog:
+      settings:
+      - matches:
+        - request.headers['x-ai-eg-model'] != ''
+        sinks:
+        - type: File
+          file:
+            path: /dev/stdout
+        format:
+          type: JSON
+          json:
+            client: '%REQ(X-CLIENT-ID)%'
+            thread: '%REQ(X-AGENT-THREAD)%'
+            gen_ai.request.model: '%REQ(X-AI-EG-MODEL)%'
+            gen_ai.usage.input_tokens: '%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%'
+            gen_ai.usage.cached_input_tokens: '%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cached_input_token)%'
+            gen_ai.usage.output_tokens: '%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%'
+            cost_microusd: '%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cost_microusd)%'
+            response_code: '%RESPONSE_CODE%'
+            duration: '%DURATION%'
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: AIGatewayRoute
@@ -62,6 +95,9 @@ spec:
   - metadataKey: llm_counted_input_token
     type: CEL
     cel: input_tokens - cached_input_tokens
+  - metadataKey: llm_cost_microusd
+    type: CEL
+    cel: (input_tokens - cached_input_tokens) * 2u + cached_input_tokens / 5u + output_tokens * 10u
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
@@ -113,6 +149,23 @@ spec:
             metadata:
               namespace: io.envoy.ai_gateway
               key: llm_counted_input_token
+      - clientSelectors:
+        - headers:
+          - name: x-client-id
+            type: Exact
+            value: budget-client
+        limit:
+          requests: 300
+          unit: Hour
+        cost:
+          request:
+            from: Number
+            number: 0
+          response:
+            from: Metadata
+            metadata:
+              namespace: io.envoy.ai_gateway
+              key: llm_cost_microusd
   responseOverride:
   - match:
       statusCodes:
@@ -123,12 +176,11 @@ spec:
       contentType: application/json
       body:
         type: Inline
-        inline: '{"type":"error","error":{"type":"rate_limit_error","message":"rate
-          limited by the gateway"}}'
+        inline: '{"type":"error","error":{"type":"rate_limit_error","message":"rate limited by the gateway"}}'
       header:
         set:
         - name: retry-after
-          value: "10"
+          value: '10'
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
@@ -148,6 +200,7 @@ spec:
     - headers:
       - x-api-key
     sanitize: true
+    forwardClientIDHeader: x-client-id
 ---
 apiVersion: v1
 kind: Secret
@@ -157,6 +210,7 @@ metadata:
 type: Opaque
 stringData:
   orchestrator: sk-spike-client-key
+  budget-client: sk-spike-budget-key
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend

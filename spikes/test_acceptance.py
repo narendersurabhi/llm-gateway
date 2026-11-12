@@ -12,6 +12,7 @@ Each check is independent, so the report shows exactly which requirements a fram
 import json
 import os
 import statistics
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -32,6 +33,12 @@ PROVIDER_KEYS = {9101: "sk-provider-a", 9102: "sk-provider-b"}
 ANTHROPIC = (9101, 9102)
 VLLM = (9103, 9104)
 EXPECTED = json.loads((Path(__file__).parent / "expected.json").read_text())
+# S12/S13: where per-request usage records live ("litellm" spend logs, "envoy-k8s" access
+# logs), the admin key to read them, and a client key whose budget is ~1 request.
+USAGE_SOURCE = os.environ.get("SPIKE_USAGE_SOURCE", "")
+ADMIN_KEY = os.environ.get("SPIKE_ADMIN_KEY", "")
+BUDGET_KEY = os.environ.get("SPIKE_BUDGET_KEY", "")
+CLIENT_NAME = os.environ.get("SPIKE_CLIENT_NAME", "orchestrator")
 HEADERS = {"x-api-key": CLIENT_KEY, "anthropic-version": "2023-06-01",
            "content-type": "application/json"}  # fmt: skip
 
@@ -232,3 +239,77 @@ def test_s11_overhead():
     added_p99 = (via[98] - direct[98]) * 1000
     print(f"\n{GATEWAY}: added latency p50 {added_p50:.1f} ms, p99 {added_p99:.1f} ms")
     assert added_p99 < 10, f"p99 overhead {added_p99:.1f} ms"
+
+
+# --- S12–S13: usage accounting and budgets ----------------------------------------------------
+
+
+def usage_records() -> list[dict]:
+    """Recent per-request usage records, normalized to client / model / tokens / thread."""
+    if USAGE_SOURCE == "litellm":
+        raw = httpx.get(BASE + "/spend/logs", headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                        timeout=30).json()  # fmt: skip
+        out = []
+        for r in raw if isinstance(raw, list) else []:
+            meta = r.get("metadata") or {}
+            out.append({
+                "client": meta.get("user_api_key_alias"), "model": r.get("model_group"),
+                "input": r.get("prompt_tokens"), "output": r.get("completion_tokens"),
+                "cost": r.get("spend"), "thread": r.get("session_id"), "raw": r,
+            })  # fmt: skip
+        return out
+    if USAGE_SOURCE == "envoy-k8s":
+        logs = subprocess.run(
+            ["kubectl", "-n", "envoy-gateway-system", "logs", "--since=3m", "--all-containers",
+             "-l", "gateway.envoyproxy.io/owning-gateway-name=aigw-spike"],
+            capture_output=True, text=True, timeout=60,
+        ).stdout  # fmt: skip
+        out = []
+        for line in logs.splitlines():
+            if not line.startswith("{"):
+                continue
+            r = json.loads(line)
+            if "gen_ai.request.model" not in r:
+                continue
+            out.append({
+                "client": r.get("client"), "model": r.get("gen_ai.request.model"),
+                "input": r.get("gen_ai.usage.input_tokens"),
+                "output": r.get("gen_ai.usage.output_tokens"),
+                "cost": r.get("cost_microusd"), "thread": r.get("thread"), "raw": r,
+            })  # fmt: skip
+        return out
+    pytest.fail(f"no usage record source configured for {GATEWAY}")
+
+
+def test_s12_per_request_usage_record_without_content():
+    marker = f"zebra-sapphire-{uuid.uuid4().hex[:8]}"
+    thread = f"usage-{uuid.uuid4().hex[:8]}"
+    assert post(content=body(text=marker), headers={THREAD: thread}).status_code == 200
+    mine = []
+    for _ in range(15):
+        time.sleep(2)
+        mine = [r for r in usage_records() if str(r["thread"]) == thread]
+        if mine:
+            break
+    assert mine, "no usage record for the request"
+    [record] = mine
+    assert record["client"] == CLIENT_NAME, record["client"]
+    assert record["model"] == "claude-sonnet-5-5"
+    assert record["input"] not in (None, "", "-") and record["output"] not in (None, "", "-")
+    assert int(record["output"]) == 3
+    assert marker not in json.dumps(record["raw"]), "prompt content stored in the usage record"
+
+
+def test_s13_per_client_budget_enforced():
+    assert BUDGET_KEY, "no budget key configured"
+    statuses = []
+    for _ in range(8):
+        resp = post(headers={"x-api-key": BUDGET_KEY})
+        statuses.append(resp.status_code)
+        if resp.status_code in (400, 402, 429) or (
+            resp.status_code == 422 and "budget_exceeded" in resp.text  # LiteLLM's code
+        ):
+            break
+        time.sleep(2)
+    assert statuses[0] == 200, statuses
+    assert statuses[-1] in (400, 402, 422, 429), f"budget never enforced: {statuses}"

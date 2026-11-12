@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: spike
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:17.9
+        env:
+        - name: POSTGRES_PASSWORD
+          value: litellm-spike
+        - name: POSTGRES_DB
+          value: litellm
+        ports:
+        - containerPort: 5432
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - postgres
+          periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: spike
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: spike
+data:
+  config.yaml: "model_list:\n  - model_name: claude-sonnet-5-5\n    litellm_params: &claude_a\n      model: anthropic/claude-sonnet-5-5\n      api_base: http://anthropic-a.spike.svc.cluster.local:8080\n\
+    \      api_key: os.environ/PROVIDER_KEY_A\n      # Spike prices (USD per token), so spend and budgets can be computed.\n      input_cost_per_token: 0.000002\n      output_cost_per_token: 0.00001\n \
+    \     cache_read_input_token_cost: 0.0000002\n  - model_name: claude-sonnet-5-5\n    litellm_params:\n      <<: *claude_a\n      api_base: http://anthropic-b.spike.svc.cluster.local:8080\n      api_key:\
+    \ os.environ/PROVIDER_KEY_B\n  - model_name: claude-limited\n    litellm_params: *claude_a\n  - model_name: qwen-test\n    litellm_params:\n      model: hosted_vllm/qwen-test\n      api_base: http://vllm-1.spike.svc.cluster.local:8080/v1\n\
+    \  - model_name: qwen-test\n    litellm_params:\n      model: hosted_vllm/qwen-test\n      api_base: http://vllm-2.spike.svc.cluster.local:8080/v1\n\nrouter_settings:\n  routing_strategy: simple-shuffle\n\
+    \  optional_pre_call_checks: [\"session_affinity\"]\n  num_retries: 2\n  allowed_fails: 1\n  cooldown_time: 30\n  redis_host: redis.redis-system.svc.cluster.local\n  redis_port: 6379\n\nlitellm_settings:\n\
+    \  turn_off_message_logging: true\n  callbacks: [\"otel\"]\n\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n  database_url: os.environ/DATABASE_URL\n"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: spike
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+    spec:
+      containers:
+      - name: litellm
+        image: ghcr.io/berriai/litellm-database:v1.106.6
+        args:
+        - --config
+        - /etc/litellm/config.yaml
+        - --port
+        - '4000'
+        - --num_workers
+        - '1'
+        env:
+        - name: LITELLM_MASTER_KEY
+          value: sk-spike-master-key
+        - name: DATABASE_URL
+          value: postgresql://postgres:litellm-spike@postgres.spike.svc.cluster.local:5432/litellm
+        - name: PROVIDER_KEY_A
+          value: sk-provider-a
+        - name: PROVIDER_KEY_B
+          value: sk-provider-b
+        - name: LITELLM_LOCAL_MODEL_COST_MAP
+          value: 'True'
+        - name: OTEL_EXPORTER
+          value: otlp_http
+        - name: OTEL_ENDPOINT
+          value: http://otel-lgtm.spike.svc.cluster.local:4318/v1/traces
+        - name: OTEL_SERVICE_NAME
+          value: litellm-k8s-spike
+        ports:
+        - containerPort: 4000
+        volumeMounts:
+        - name: config
+          mountPath: /etc/litellm
+        readinessProbe:
+          httpGet:
+            path: /health/readiness
+            port: 4000
+          periodSeconds: 5
+          failureThreshold: 60
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 500m
+          limits:
+            memory: 3Gi
+      volumes:
+      - name: config
+        configMap:
+          name: litellm-config
+  strategy:
+    type: Recreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: spike
+spec:
+  selector:
+    app: litellm
+  ports:
+  - port: 4000
+    targetPort: 4000

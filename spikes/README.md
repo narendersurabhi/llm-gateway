@@ -1,7 +1,10 @@
 # Gateway framework spike (2026-11-12)
 
-**Outcome:** Envoy AI Gateway 1.2.0 on Kubernetes passes all 12 checks with the config in
-[k8s/gateway.yaml](k8s/gateway.yaml). Standalone `aigw run` and LiteLLM 1.106.6 do not.
+**Outcome:** on the same Kubernetes cluster, Envoy AI Gateway 1.2.0 passes 13 of 14 checks
+(all functional ones; only latency through `kubectl port-forward` misses) and LiteLLM 1.106.6
+with Postgres and Redis passes 9 of 14. Measured in-cluster, LiteLLM adds ~13 ms per call at one
+connection and saturates at ~50–60 req/s per worker; Envoy adds ~1.5 ms and handles ~560 req/s
+per pod on the same laptop.
 
 Spec 002's must-haves as black-box checks ([test_acceptance.py](test_acceptance.py)) against
 off-the-shelf gateways, before writing any gateway code. WireMock stands in for the providers
@@ -17,7 +20,52 @@ docker compose down
 `bin/aigw` is the `aigw-darwin-arm64` asset of release v1.2.0, checked against the SHA-256
 digest GitHub records for it: `4be4a8fdfee58acc52aba1a9e71e598df00a17ad05477cb3f4e706604636df3e`.
 
-## Kubernetes run (Envoy AI Gateway 1.2.0 on Envoy Gateway 1.9.3, kind 0.33.0, Kubernetes 1.37)
+## Head to head on Kubernetes (2026-11-12, second run)
+
+Same kind cluster, same WireMock upstreams, same 14 checks (`k8s/run.sh envoy|litellm`). LiteLLM
+runs from `ghcr.io/berriai/litellm-database:v1.106.6` with Postgres 17.9 and Redis
+([k8s/litellm.yaml](k8s/litellm.yaml)); its Helm chart was skipped (it pins app v1.85.1 and
+Bitnami charts). Virtual keys: `orchestrator` with `model_tpm_limit {claude-limited: 2000}`,
+`budget-client` with `max_budget` ≈ one request.
+
+| Check | Envoy AI Gateway 1.2.0 | LiteLLM 1.106.6 + Postgres + Redis |
+|---|---|---|
+| S1 body byte for byte | ✓ | ✗ re-serialized (content intact) |
+| S1b body semantically unchanged | ✓ | ✓ |
+| S2 response and usage unchanged | ✓ | ✓ |
+| S3 SSE unchanged | ✓ | ✓ |
+| S4 provider key per backend | ✓ | ✓ |
+| S5 client key required (401) | ✓ | ✓ (DB-less 500 gone) |
+| S6 OpenAI-compatible | ✓ | ✓ |
+| S7 thread affinity | ✓ | ✓ |
+| S8 failover, same model | ✓ | ✗ first request after the 529 stub gets 500 |
+| S9 cache-aware limit | ✓ (+ 429 body/`retry-after` via `responseOverride`) | limits correctly (cached calls pass, uncached overrun gets 429) but no `retry-after` |
+| S10 no prompt content in traces | ✓ | ✓ |
+| S11 overhead (in-cluster, fortio, 1 conn) | +1.5 ms p50 | +13.8 ms p50 |
+| S12 per-request usage record, no content | ✓ access log: client, thread, model, tokens, cost (CEL) | ✗ per-request spend logs incomplete (12 rows for ~216 requests); per-key and daily totals are complete |
+| S13 per-client budget | ✓ cost-weighted rate limit per client (a budget per window, not cumulative) | ✓ `max_budget` per key, rejected with 422 `budget_exceeded` (one request of overshoot) |
+| **Passed** | **13 / 14** | **9 / 14** (S13 counted after accepting its 422) |
+
+In-cluster load (fortio 1.76.0, 1000 calls, single-node kind on a laptop; LiteLLM with one worker,
+since two to four workers next to everything else were OOM-killed in the 7.6 GiB node):
+
+| | 1 connection | 16 concurrent |
+|---|---|---|
+| Direct to upstream | 0.7 ms p50, 617 req/s | 2.5 ms p50, 2380 req/s |
+| Envoy AI Gateway | 2.2 ms p50, 9 ms p99, 351 req/s | 14 ms p50, 563 req/s |
+| LiteLLM | 14.5 ms p50, 48 ms p99, 57 req/s | 239 ms p50, 2.7 s p99, 51 req/s |
+
+Notes from this run:
+- An invalid CEL expression in `llmRequestCosts` (`* 2` on a uint; needs `2u`) was **accepted by
+  the API server** and then made every request through the gateway fail with 500 until fixed,
+  and the Envoy pod had to be restarted to recover its ext-proc. Validate CEL before applying.
+- LiteLLM's one worker uses ~700 MiB; at ~55 req/s per worker, ~2,800 model calls/s would need
+  ~50 workers (~35 GiB) versus a few Envoy pods. Laptop numbers: rough, but the ratio is clear.
+- LiteLLM's built-ins Envoy lacks: virtual keys, per-key cumulative budgets, spend totals and an
+  admin UI. With Envoy, cumulative spend and budgets need our own small ledger fed by the
+  access logs.
+
+## First Kubernetes run (Envoy AI Gateway 1.2.0 on Envoy Gateway 1.9.3, kind 0.33.0, Kubernetes 1.37)
 
 ```bash
 k8s/setup.sh                                   # kind cluster, Redis, Envoy Gateway + AI Gateway (pinned)
