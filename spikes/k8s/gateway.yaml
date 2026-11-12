@@ -1,0 +1,282 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-spike
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-spike
+  namespace: spike
+spec:
+  gatewayClassName: aigw-spike
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 1975
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: spike
+  namespace: spike
+spec:
+  parentRefs:
+  - name: aigw-spike
+    kind: Gateway
+    group: gateway.networking.k8s.io
+  rules:
+  - matches:
+    - headers:
+      - type: Exact
+        name: x-ai-eg-model
+        value: claude-sonnet-5-5
+    backendRefs:
+    - name: anthropic-a
+      priority: 0
+    - name: anthropic-b
+      priority: 0
+  - matches:
+    - headers:
+      - type: Exact
+        name: x-ai-eg-model
+        value: claude-limited
+    backendRefs:
+    - name: anthropic-a
+  - matches:
+    - headers:
+      - type: Exact
+        name: x-ai-eg-model
+        value: qwen-test
+    backendRefs:
+    - name: vllm
+  llmRequestCosts:
+  - metadataKey: llm_input_token
+    type: InputToken
+  - metadataKey: llm_cached_input_token
+    type: CachedInputToken
+  - metadataKey: llm_output_token
+    type: OutputToken
+  - metadataKey: llm_counted_input_token
+    type: CEL
+    cel: input_tokens - cached_input_tokens
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: spike
+  namespace: spike
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: spike
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      type: Header
+      header:
+        name: x-agent-thread
+  retry:
+    numAttemptsPerPriority: 1
+    numRetries: 2
+    retryOn:
+      triggers:
+      - connect-failure
+      - reset
+      - retriable-status-codes
+      httpStatusCodes:
+      - 500
+      - 502
+      - 503
+      - 529
+  rateLimit:
+    type: Global
+    global:
+      rules:
+      - clientSelectors:
+        - headers:
+          - name: x-ai-eg-model
+            type: Exact
+            value: claude-limited
+        limit:
+          requests: 2000
+          unit: Minute
+        cost:
+          request:
+            from: Number
+            number: 0
+          response:
+            from: Metadata
+            metadata:
+              namespace: io.envoy.ai_gateway
+              key: llm_counted_input_token
+  responseOverride:
+  - match:
+      statusCodes:
+      - type: Value
+        value: 429
+    source: Local
+    response:
+      contentType: application/json
+      body:
+        type: Inline
+        inline: '{"type":"error","error":{"type":"rate_limit_error","message":"rate
+          limited by the gateway"}}'
+      header:
+        set:
+        - name: retry-after
+          value: "10"
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: client-keys
+  namespace: spike
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: spike
+  apiKeyAuth:
+    credentialRefs:
+    - kind: Secret
+      name: client-keys
+    extractFrom:
+    - headers:
+      - x-api-key
+    sanitize: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: client-keys
+  namespace: spike
+type: Opaque
+stringData:
+  orchestrator: sk-spike-client-key
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: anthropic-a
+  namespace: spike
+spec:
+  endpoints:
+  - fqdn:
+      hostname: anthropic-a.spike.svc.cluster.local
+      port: 8080
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: anthropic-b
+  namespace: spike
+spec:
+  endpoints:
+  - fqdn:
+      hostname: anthropic-b.spike.svc.cluster.local
+      port: 8080
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: vllm
+  namespace: spike
+spec:
+  endpoints:
+  - fqdn:
+      hostname: vllm-1.spike.svc.cluster.local
+      port: 8080
+  - fqdn:
+      hostname: vllm-2.spike.svc.cluster.local
+      port: 8080
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: anthropic-a
+  namespace: spike
+spec:
+  schema:
+    name: Anthropic
+  backendRef:
+    name: anthropic-a
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: anthropic-b
+  namespace: spike
+spec:
+  schema:
+    name: Anthropic
+  backendRef:
+    name: anthropic-b
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: vllm
+  namespace: spike
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: vllm
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-a-key
+  namespace: spike
+type: Opaque
+stringData:
+  apiKey: sk-provider-a
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: anthropic-a-key
+  namespace: spike
+spec:
+  targetRefs:
+  - group: aigateway.envoyproxy.io
+    kind: AIServiceBackend
+    name: anthropic-a
+  type: AnthropicAPIKey
+  anthropicAPIKey:
+    secretRef:
+      name: anthropic-a-key
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-b-key
+  namespace: spike
+type: Opaque
+stringData:
+  apiKey: sk-provider-b
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: anthropic-b-key
+  namespace: spike
+spec:
+  targetRefs:
+  - group: aigateway.envoyproxy.io
+    kind: AIServiceBackend
+    name: anthropic-b
+  type: AnthropicAPIKey
+  anthropicAPIKey:
+    secretRef:
+      name: anthropic-b-key

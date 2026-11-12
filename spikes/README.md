@@ -1,5 +1,8 @@
 # Gateway framework spike (2026-11-12)
 
+**Outcome:** Envoy AI Gateway 1.2.0 on Kubernetes passes all 12 checks with the config in
+[k8s/gateway.yaml](k8s/gateway.yaml). Standalone `aigw run` and LiteLLM 1.106.6 do not.
+
 Spec 002's must-haves as black-box checks ([test_acceptance.py](test_acceptance.py)) against
 off-the-shelf gateways, before writing any gateway code. WireMock stands in for the providers
 (two Anthropic "workspaces", two vLLM replicas); otel-lgtm collects traces.
@@ -14,7 +17,36 @@ docker compose down
 `bin/aigw` is the `aigw-darwin-arm64` asset of release v1.2.0, checked against the SHA-256
 digest GitHub records for it: `4be4a8fdfee58acc52aba1a9e71e598df00a17ad05477cb3f4e706604636df3e`.
 
-## Results
+## Kubernetes run (Envoy AI Gateway 1.2.0 on Envoy Gateway 1.9.3, kind 0.33.0, Kubernetes 1.37)
+
+```bash
+k8s/setup.sh                                   # kind cluster, Redis, Envoy Gateway + AI Gateway (pinned)
+kubectl apply -f k8s/upstreams.yaml -f k8s/gateway.yaml
+# port-forward the Envoy service to :1975, WireMock to :9101-9104, otel-lgtm to :3000, then:
+SPIKE_GATEWAY=envoy-k8s SPIKE_BASE_URL=http://localhost:1975 SPIKE_ANTHROPIC_PATH=/anthropic/v1/messages \
+  SPIKE_OTEL_SERVICE=envoy-k8s-spike uv run pytest spikes -m live
+bin/kind delete cluster --name aigw-spike
+```
+
+| Check | Result on Kubernetes | Config that does it |
+|---|---|---|
+| S1–S3 fidelity (bytes, usage, SSE) | ✓ | `schema: {name: Anthropic}` |
+| S4 per-backend provider key | ✓ 15/15 per workspace (the standalone mix-up does not reproduce) | `BackendSecurityPolicy` `AnthropicAPIKey` per `AIServiceBackend` |
+| S5 client key required | ✓ 401 | `SecurityPolicy.apiKeyAuth` with `sanitize: true` |
+| S6 OpenAI-compatible | ✓ | `schema: {name: OpenAI}` |
+| S7 thread affinity | ✓ | `BackendTrafficPolicy.loadBalancer.consistentHash.header: x-agent-thread` |
+| S8 failover, same model | ✓ | `retry.numAttemptsPerPriority: 1`, `retriable-status-codes [500, 502, 503, 529]` |
+| S9 cache-aware token limit | ✓ cached calls pass, uncached overrun gets 429 | `llmRequestCosts` CEL `input_tokens - cached_input_tokens` + global rate limit (Redis) |
+| S9 429 shape | ✓ Anthropic error body, `retry-after` | `responseOverride` for local 429s; `retry-after` is static (header operators like `%RESP(...)%` are not evaluated) |
+| S10 no prompt content in traces | ✓ | extProc env `AI_GATEWAY_TRACING_SEMCONV=gen_ai` |
+| S11 overhead | ✓ in-cluster (fortio 1.76.0, 500 calls, 1 connection): +1.7 ms p50, +4.3 ms p99 | — |
+
+Still to check before production: whether Envoy's `input_tokens` for Anthropic includes cache
+*writes* (Anthropic counts them against input limits; the stubs had none), a 401 body in the
+Anthropic error shape (another `responseOverride`), llm-d for self-hosted routing, and load at
+production rates.
+
+## Standalone and LiteLLM run
 
 | Check | LiteLLM 1.106.6 | Envoy AI Gateway 1.2.0 (`aigw run`, standalone) |
 |---|---|---|

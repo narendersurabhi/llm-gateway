@@ -1,0 +1,292 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spike
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiremock-mappings
+  namespace: spike
+data:
+  anthropic-big-uncached.json: "{\n  \"priority\": 2,\n  \"request\": {\n    \"method\"\
+    : \"POST\",\n    \"urlPath\": \"/v1/messages\",\n    \"bodyPatterns\": [\n   \
+    \   {\n        \"contains\": \"BIG-UNCACHED\"\n      }\n    ]\n  },\n  \"response\"\
+    : {\n    \"status\": 200,\n    \"headers\": {\n      \"content-type\": \"application/json\"\
+    \n    },\n    \"jsonBody\": {\n      \"id\": \"msg_1\",\n      \"type\": \"message\"\
+    ,\n      \"model\": \"claude-sonnet-5-5\",\n      \"role\": \"assistant\",\n \
+    \     \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\"\
+    : \"hi\"\n        }\n      ],\n      \"stop_reason\": \"end_turn\",\n      \"\
+    usage\": {\n        \"input_tokens\": 5000,\n        \"output_tokens\": 3,\n \
+    \       \"cache_read_input_tokens\": 0,\n        \"cache_creation_input_tokens\"\
+    : 0\n      }\n    }\n  }\n}"
+  anthropic-default.json: "{\n  \"priority\": 5,\n  \"request\": {\n    \"method\"\
+    : \"POST\",\n    \"urlPath\": \"/v1/messages\"\n  },\n  \"response\": {\n    \"\
+    status\": 200,\n    \"headers\": {\n      \"content-type\": \"application/json\"\
+    ,\n      \"request-id\": \"req_spike\"\n    },\n    \"jsonBody\": {\n      \"\
+    id\": \"msg_1\",\n      \"type\": \"message\",\n      \"model\": \"claude-sonnet-5-5\"\
+    ,\n      \"role\": \"assistant\",\n      \"content\": [\n        {\n         \
+    \ \"type\": \"text\",\n          \"text\": \"hi\"\n        }\n      ],\n     \
+    \ \"stop_reason\": \"end_turn\",\n      \"usage\": {\n        \"input_tokens\"\
+    : 12,\n        \"output_tokens\": 3,\n        \"cache_read_input_tokens\": 900,\n\
+    \        \"cache_creation_input_tokens\": 0\n      }\n    }\n  }\n}"
+  anthropic-stream.json: "{\n  \"priority\": 1,\n  \"request\": {\n    \"method\"\
+    : \"POST\",\n    \"urlPath\": \"/v1/messages\",\n    \"bodyPatterns\": [\n   \
+    \   {\n        \"matchesJsonPath\": \"$[?(@.stream == true)]\"\n      }\n    ]\n\
+    \  },\n  \"response\": {\n    \"status\": 200,\n    \"headers\": {\n      \"content-type\"\
+    : \"text/event-stream\"\n    },\n    \"body\": \"event: message_start\\ndata:\
+    \ {\\\"type\\\": \\\"message_start\\\", \\\"message\\\": {\\\"id\\\": \\\"msg_1\\\
+    \", \\\"type\\\": \\\"message\\\", \\\"model\\\": \\\"claude-sonnet-5-5\\\", \\\
+    \"role\\\": \\\"assistant\\\", \\\"content\\\": [], \\\"stop_reason\\\": \\\"\
+    end_turn\\\", \\\"usage\\\": {\\\"input_tokens\\\": 12, \\\"output_tokens\\\"\
+    : 1, \\\"cache_read_input_tokens\\\": 900, \\\"cache_creation_input_tokens\\\"\
+    : 0}}}\\n\\nevent: content_block_start\\ndata: {\\\"type\\\": \\\"content_block_start\\\
+    \", \\\"index\\\": 0, \\\"content_block\\\": {\\\"type\\\": \\\"text\\\", \\\"\
+    text\\\": \\\"\\\"}}\\n\\nevent: content_block_delta\\ndata: {\\\"type\\\": \\\
+    \"content_block_delta\\\", \\\"index\\\": 0, \\\"delta\\\": {\\\"type\\\": \\\"\
+    text_delta\\\", \\\"text\\\": \\\"hi\\\"}}\\n\\nevent: content_block_stop\\ndata:\
+    \ {\\\"type\\\": \\\"content_block_stop\\\", \\\"index\\\": 0}\\n\\nevent: message_delta\\\
+    ndata: {\\\"type\\\": \\\"message_delta\\\", \\\"delta\\\": {\\\"stop_reason\\\
+    \": \\\"end_turn\\\"}, \\\"usage\\\": {\\\"output_tokens\\\": 3}}\\n\\nevent:\
+    \ message_stop\\ndata: {\\\"type\\\": \\\"message_stop\\\"}\\n\\n\"\n  }\n}"
+  openai-chat.json: "{\n  \"priority\": 5,\n  \"request\": {\n    \"method\": \"POST\"\
+    ,\n    \"urlPath\": \"/v1/chat/completions\"\n  },\n  \"response\": {\n    \"\
+    status\": 200,\n    \"headers\": {\n      \"content-type\": \"application/json\"\
+    \n    },\n    \"jsonBody\": {\n      \"id\": \"c1\",\n      \"object\": \"chat.completion\"\
+    ,\n      \"created\": 1,\n      \"model\": \"qwen-test\",\n      \"choices\":\
+    \ [\n        {\n          \"index\": 0,\n          \"finish_reason\": \"stop\"\
+    ,\n          \"message\": {\n            \"role\": \"assistant\",\n          \
+    \  \"content\": \"hi\"\n          }\n        }\n      ],\n      \"usage\": {\n\
+    \        \"prompt_tokens\": 10,\n        \"completion_tokens\": 2,\n        \"\
+    total_tokens\": 12\n      }\n    }\n  }\n}"
+  openai-models.json: "{\n  \"priority\": 5,\n  \"request\": {\n    \"method\": \"\
+    GET\",\n    \"urlPath\": \"/v1/models\"\n  },\n  \"response\": {\n    \"status\"\
+    : 200,\n    \"jsonBody\": {\n      \"object\": \"list\",\n      \"data\": [\n\
+    \        {\n          \"id\": \"qwen-test\",\n          \"object\": \"model\"\n\
+    \        }\n      ]\n    }\n  }\n}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anthropic-a
+  namespace: spike
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anthropic-a
+  template:
+    metadata:
+      labels:
+        app: anthropic-a
+    spec:
+      containers:
+      - name: anthropic-a
+        image: wiremock/wiremock:3.13.2
+        args:
+        - --global-response-templating
+        - --disable-banner
+        - --max-request-journal-entries
+        - '5000'
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: mappings
+          mountPath: /home/wiremock/mappings
+      volumes:
+      - name: mappings
+        configMap:
+          name: wiremock-mappings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anthropic-a
+  namespace: spike
+spec:
+  selector:
+    app: anthropic-a
+  ports:
+  - name: p8080
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anthropic-b
+  namespace: spike
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anthropic-b
+  template:
+    metadata:
+      labels:
+        app: anthropic-b
+    spec:
+      containers:
+      - name: anthropic-b
+        image: wiremock/wiremock:3.13.2
+        args:
+        - --global-response-templating
+        - --disable-banner
+        - --max-request-journal-entries
+        - '5000'
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: mappings
+          mountPath: /home/wiremock/mappings
+      volumes:
+      - name: mappings
+        configMap:
+          name: wiremock-mappings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anthropic-b
+  namespace: spike
+spec:
+  selector:
+    app: anthropic-b
+  ports:
+  - name: p8080
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-1
+  namespace: spike
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-1
+  template:
+    metadata:
+      labels:
+        app: vllm-1
+    spec:
+      containers:
+      - name: vllm-1
+        image: wiremock/wiremock:3.13.2
+        args:
+        - --global-response-templating
+        - --disable-banner
+        - --max-request-journal-entries
+        - '5000'
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: mappings
+          mountPath: /home/wiremock/mappings
+      volumes:
+      - name: mappings
+        configMap:
+          name: wiremock-mappings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-1
+  namespace: spike
+spec:
+  selector:
+    app: vllm-1
+  ports:
+  - name: p8080
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-2
+  namespace: spike
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-2
+  template:
+    metadata:
+      labels:
+        app: vllm-2
+    spec:
+      containers:
+      - name: vllm-2
+        image: wiremock/wiremock:3.13.2
+        args:
+        - --global-response-templating
+        - --disable-banner
+        - --max-request-journal-entries
+        - '5000'
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: mappings
+          mountPath: /home/wiremock/mappings
+      volumes:
+      - name: mappings
+        configMap:
+          name: wiremock-mappings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-2
+  namespace: spike
+spec:
+  selector:
+    app: vllm-2
+  ports:
+  - name: p8080
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-lgtm
+  namespace: spike
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-lgtm
+  template:
+    metadata:
+      labels:
+        app: otel-lgtm
+    spec:
+      containers:
+      - name: otel-lgtm
+        image: grafana/otel-lgtm:0.38.1
+        ports:
+        - containerPort: 3000
+        - containerPort: 4317
+        - containerPort: 4318
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-lgtm
+  namespace: spike
+spec:
+  selector:
+    app: otel-lgtm
+  ports:
+  - name: p3000
+    port: 3000
+    targetPort: 3000
+  - name: p4317
+    port: 4317
+    targetPort: 4317
+  - name: p4318
+    port: 4318
+    targetPort: 4318
