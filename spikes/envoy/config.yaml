@@ -1,0 +1,208 @@
+# Envoy AI Gateway v1.2.0 (`aigw run`) for the spike. Same resources as on Kubernetes.
+# Upstreams: WireMock anthropic-a :9101, anthropic-b :9102, vllm-1 :9103, vllm-2 :9104.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 1975
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: spike
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - {type: Exact, name: x-ai-eg-model, value: claude-sonnet-5-5}
+      backendRefs:
+        - {name: anthropic-a, priority: 0}
+        - {name: anthropic-b, priority: 0}
+    - matches:
+        - headers:
+            - {type: Exact, name: x-ai-eg-model, value: claude-limited}
+      backendRefs:
+        - {name: anthropic-a}
+    - matches:
+        - headers:
+            - {type: Exact, name: x-ai-eg-model, value: qwen-test}
+      backendRefs:
+        - {name: vllm}
+  llmRequestCosts:
+    - {metadataKey: llm_input_token, type: InputToken}
+    - {metadataKey: llm_cached_input_token, type: CachedInputToken}
+    - {metadataKey: llm_output_token, type: OutputToken}
+    # What Anthropic counts against input rate limits: uncached input only.
+    - {metadataKey: llm_counted_input_token, type: CEL, cel: "input_tokens - cached_input_tokens"}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: spike
+  namespace: default
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: spike}
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      type: Header
+      header: {name: x-agent-thread}
+  retry:
+    numAttemptsPerPriority: 1
+    numRetries: 2
+    retryOn:
+      triggers: [connect-failure, reset, retriable-status-codes]
+      httpStatusCodes: [500, 502, 503, 529]
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - {name: x-ai-eg-model, type: Exact, value: claude-limited}
+          limit: {requests: 2000, unit: Minute}
+          cost:
+            request: {from: Number, number: 0}
+            response:
+              from: Metadata
+              metadata: {namespace: io.envoy.ai_gateway, key: llm_counted_input_token}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: client-keys
+  namespace: default
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: spike}
+  apiKeyAuth:
+    credentialRefs:
+      - {kind: Secret, name: client-keys}
+    extractFrom:
+      - headers: [x-api-key]
+    sanitize: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: client-keys
+  namespace: default
+type: Opaque
+stringData:
+  orchestrator: sk-spike-client-key
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: anthropic-a
+  namespace: default
+spec:
+  endpoints:
+    - ip: {address: 127.0.0.1, port: 9101}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: anthropic-b
+  namespace: default
+spec:
+  endpoints:
+    - ip: {address: 127.0.0.1, port: 9102}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: vllm
+  namespace: default
+spec:
+  endpoints:
+    - ip: {address: 127.0.0.1, port: 9103}
+    - ip: {address: 127.0.0.1, port: 9104}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: anthropic-a
+  namespace: default
+spec:
+  schema: {name: Anthropic}
+  backendRef: {name: anthropic-a, kind: Backend, group: gateway.envoyproxy.io}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: anthropic-b
+  namespace: default
+spec:
+  schema: {name: Anthropic}
+  backendRef: {name: anthropic-b, kind: Backend, group: gateway.envoyproxy.io}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: vllm
+  namespace: default
+spec:
+  schema: {name: OpenAI}
+  backendRef: {name: vllm, kind: Backend, group: gateway.envoyproxy.io}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-a-key
+  namespace: default
+type: Opaque
+stringData:
+  apiKey: ${PROVIDER_KEY_A}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: anthropic-a-key
+  namespace: default
+spec:
+  targetRefs:
+    - {group: aigateway.envoyproxy.io, kind: AIServiceBackend, name: anthropic-a}
+  type: AnthropicAPIKey
+  anthropicAPIKey:
+    secretRef: {name: anthropic-a-key}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-b-key
+  namespace: default
+type: Opaque
+stringData:
+  apiKey: ${PROVIDER_KEY_B}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: anthropic-b-key
+  namespace: default
+spec:
+  targetRefs:
+    - {group: aigateway.envoyproxy.io, kind: AIServiceBackend, name: anthropic-b}
+  type: AnthropicAPIKey
+  anthropicAPIKey:
+    secretRef: {name: anthropic-b-key}

@@ -1,0 +1,33 @@
+{
+  "priority": 5,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "request-id": "req_spike"
+    },
+    "jsonBody": {
+      "id": "msg_1",
+      "type": "message",
+      "model": "claude-sonnet-5-5",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "hi"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 900,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  }
+}

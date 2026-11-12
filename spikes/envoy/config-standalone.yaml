@@ -1,0 +1,211 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+  - name: http
+    port: 1975
+    protocol: HTTP
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: spike
+  namespace: default
+spec:
+  llmRequestCosts:
+  - metadataKey: llm_input_token
+    type: InputToken
+  - metadataKey: llm_cached_input_token
+    type: CachedInputToken
+  - metadataKey: llm_output_token
+    type: OutputToken
+  - cel: input_tokens - cached_input_tokens
+    metadataKey: llm_counted_input_token
+    type: CEL
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: aigw-run
+  rules:
+  - backendRefs:
+    - name: anthropic-a
+      priority: 0
+    - name: anthropic-b
+      priority: 0
+    matches:
+    - headers:
+      - name: x-ai-eg-model
+        type: Exact
+        value: claude-sonnet-5-5
+  - backendRefs:
+    - name: anthropic-a
+    matches:
+    - headers:
+      - name: x-ai-eg-model
+        type: Exact
+        value: claude-limited
+  - backendRefs:
+    - name: vllm
+    matches:
+    - headers:
+      - name: x-ai-eg-model
+        type: Exact
+        value: qwen-test
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: spike
+  namespace: default
+spec:
+  retry:
+    numAttemptsPerPriority: 1
+    numRetries: 2
+    retryOn:
+      httpStatusCodes:
+      - 500
+      - 502
+      - 503
+      - 529
+      triggers:
+      - connect-failure
+      - reset
+      - retriable-status-codes
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: spike
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: anthropic-a
+  namespace: default
+spec:
+  endpoints:
+  - ip:
+      address: 127.0.0.1
+      port: 9101
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: anthropic-b
+  namespace: default
+spec:
+  endpoints:
+  - ip:
+      address: 127.0.0.1
+      port: 9102
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: vllm
+  namespace: default
+spec:
+  endpoints:
+  - ip:
+      address: 127.0.0.1
+      port: 9103
+  - ip:
+      address: 127.0.0.1
+      port: 9104
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: anthropic-a
+  namespace: default
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: anthropic-a
+  schema:
+    name: Anthropic
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: anthropic-b
+  namespace: default
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: anthropic-b
+  schema:
+    name: Anthropic
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: vllm
+  namespace: default
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: vllm
+  schema:
+    name: OpenAI
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-a-key
+  namespace: default
+stringData:
+  apiKey: ${PROVIDER_KEY_A}
+type: Opaque
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: anthropic-a-key
+  namespace: default
+spec:
+  anthropicAPIKey:
+    secretRef:
+      name: anthropic-a-key
+  targetRefs:
+  - group: aigateway.envoyproxy.io
+    kind: AIServiceBackend
+    name: anthropic-a
+  type: AnthropicAPIKey
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-b-key
+  namespace: default
+stringData:
+  apiKey: ${PROVIDER_KEY_B}
+type: Opaque
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: anthropic-b-key
+  namespace: default
+spec:
+  anthropicAPIKey:
+    secretRef:
+      name: anthropic-b-key
+  targetRefs:
+  - group: aigateway.envoyproxy.io
+    kind: AIServiceBackend
+    name: anthropic-b
+  type: AnthropicAPIKey

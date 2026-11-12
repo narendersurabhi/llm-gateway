@@ -1,0 +1,43 @@
+# LiteLLM 1.106.6 proxy for the spike. Two deployments of claude-sonnet-5-5 (two "workspaces"),
+# one rate-limited model on anthropic-a, and a vLLM-style OpenAI-compatible model.
+model_list:
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_base: http://localhost:9101
+      api_key: os.environ/PROVIDER_KEY_A
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_base: http://localhost:9102
+      api_key: os.environ/PROVIDER_KEY_B
+  - model_name: claude-limited
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_base: http://localhost:9101
+      api_key: os.environ/PROVIDER_KEY_A
+      tpm: 2000
+      rpm: 1000
+  - model_name: qwen-test
+    litellm_params:
+      model: hosted_vllm/qwen-test
+      api_base: http://localhost:9103/v1
+  - model_name: qwen-test
+    litellm_params:
+      model: hosted_vllm/qwen-test
+      api_base: http://localhost:9104/v1
+
+router_settings:
+  routing_strategy: simple-shuffle
+  enable_pre_call_checks: true
+  num_retries: 2
+  optional_pre_call_checks: ["session_affinity"]
+  allowed_fails: 1
+  cooldown_time: 30
+
+litellm_settings:
+  turn_off_message_logging: true
+  callbacks: ["otel"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

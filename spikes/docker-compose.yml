@@ -1,0 +1,18 @@
+# Spike infrastructure: WireMock stands in for the providers, otel-lgtm collects telemetry.
+# The gateways under test run on the host (see run_litellm.sh / run_envoy.sh).
+x-wiremock: &wiremock
+  image: wiremock/wiremock:3.13.2
+  command: ["--global-response-templating", "--disable-banner", "--max-request-journal-entries", "5000"]
+  volumes:
+    - ./wiremock/mappings:/home/wiremock/mappings:ro
+services:
+  anthropic-a: {<<: *wiremock, ports: ["9101:8080"]}
+  anthropic-b: {<<: *wiremock, ports: ["9102:8080"]}
+  vllm-1: {<<: *wiremock, ports: ["9103:8080"]}
+  vllm-2: {<<: *wiremock, ports: ["9104:8080"]}
+  redis:
+    image: redis:7.4.1
+    ports: ["6379:6379"]
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.38.1
+    ports: ["3000:3000", "4317:4317", "4318:4318"]
