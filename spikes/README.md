@@ -84,3 +84,17 @@ production rates.
 Kubernetes deployment of Envoy AI Gateway (where S5, S7, S9 should be configurable), llm-d
 for self-hosted routing, LiteLLM with its database (virtual-key limits), and load at
 production rates.
+
+## Reported upstream (2026-11-12)
+
+Minimal reproductions are in [repro/](repro/).
+
+- Envoy AI Gateway, standalone: the second keyed backend in a route receives the first
+  backend's API key. Reported privately as security advisory GHSA-63wj-w392-5j85, per the
+  project's security policy. Does not reproduce on Kubernetes.
+- Envoy AI Gateway, standalone: a `ConsistentHash` `BackendTrafficPolicy` stops Envoy from
+  starting: [theagentrouter/agent-router#3015](https://github.com/theagentrouter/agent-router/issues/3015).
+- Envoy AI Gateway, standalone: `apiKeyAuth` returns 500 for every request:
+  [theagentrouter/agent-router#3016](https://github.com/theagentrouter/agent-router/issues/3016).
+- LiteLLM, no database: a missing key returns 500 instead of 401. Already reported as
+  [BerriAI/litellm#38978](https://github.com/BerriAI/litellm/issues/38978) (open); nothing added.

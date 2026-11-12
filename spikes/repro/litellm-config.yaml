@@ -1,0 +1,8 @@
+model_list:
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_base: http://localhost:9101
+      api_key: os.environ/PROVIDER_KEY_A
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
